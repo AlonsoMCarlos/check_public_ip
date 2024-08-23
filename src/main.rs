@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-
+use chrono::{DateTime, Utc};
 // Archivo para guardar la última IP
 const ARCHIVO_IP: &str = "ultima_ip.txt";
 const TIEMPO_NO_CAMBIO_MINUTO: u64 = 24 * 60; // 1 dia
@@ -66,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ip_actual = match obtener_ip_publica().await {
             Ok(ip) => ip,
             Err(_) => {
+                println!("[{}] Error al obtener la IP pública posible perdida de conexión a internet", DateTime::<Utc>::from(Utc::now()).to_rfc3339());
                 sleep(Duration::from_secs(60)).await;
                 continue;
             }
