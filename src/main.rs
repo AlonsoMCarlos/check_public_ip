@@ -1,25 +1,47 @@
 use std::env;
 use std::fs;
 use std::time::{Duration, Instant};
-use tokio::time::sleep;
+
+use chrono::format::parse;
 use chrono::{DateTime, Utc};
+use tokio::time::sleep;
 // Archivo para guardar la última IP
 const ARCHIVO_IP: &str = "ultima_ip.txt";
 const TIEMPO_NO_CAMBIO_MINUTO: u64 = 24 * 60; // 1 dia
 
-// Función para obtener la IP pública actual (async)
-async fn obtener_ip_publica() -> Result<String, reqwest::Error> {
-    let respuesta = reqwest::get("https://api.ipify.org").await?;
-    if !respuesta.status().is_success() {
-        let respuesta = reqwest::get("https://ipapi.co/ip").await?;
+use std::net::{AddrParseError, IpAddr};
 
-        return respuesta.text().await;
+fn parse_ip(ip: &str) -> Result<IpAddr, String> {
+    let ip: IpAddr = ip
+        .parse()
+        .map_err(|error: AddrParseError| error.to_string())?;
+    Ok(ip)
+}
+
+// Función para obtener la IP pública actual (async)
+async fn get_public_ip_from(url: &str) -> Result<IpAddr, String> {
+    let respuesta = reqwest::get(url).await.map_err(|error| error.to_string())?;
+    if !respuesta.status().is_success() {
+        return Err(respuesta.text().await.map_err(|error| error.to_string())?);
     }
-    respuesta.text().await
+    return respuesta
+        .text()
+        .await
+        .map_err(|error| error.to_string())
+        .map(|ip| parse_ip(&ip))?;
+}
+
+async fn get_public_ip() -> Result<String, String> {
+    match get_public_ip_from("https://api.ipify.org").await {
+        Ok(ip) => Ok(ip.to_string()),
+        Err(_) => get_public_ip_from("https://ipapi.co/ip")
+            .await
+            .map(|ip| ip.to_string()),
+    }
 }
 
 // Función para enviar una notificación por Telegram
-async fn enviar_notificacion(
+async fn send_notification_to_telegram(
     mensaje: &str,
     bot_token: &str,
     chat_id: i64,
@@ -63,10 +85,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     loop {
-        let ip_actual = match obtener_ip_publica().await {
+        let ip_actual = match get_public_ip().await {
             Ok(ip) => ip,
             Err(_) => {
-                println!("[{}] Error al obtener la IP pública posible perdida de conexión a internet", DateTime::<Utc>::from(Utc::now()).to_rfc3339());
+                println!(
+                    "[{}] Error al obtener la IP pública posible perdida de conexión a internet",
+                    DateTime::<Utc>::from(Utc::now()).to_rfc3339()
+                );
                 sleep(Duration::from_secs(60)).await;
                 continue;
             }
@@ -76,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if ip_actual == ip_anterior && tiempo_no_cambio == 0 {
             tiempo_no_cambio = TIEMPO_NO_CAMBIO_MINUTO;
             let tiempo_transcurrido = (tiempo_actual - tiempo_anterior) / 3600; // Horas
-            enviar_notificacion(
+            send_notification_to_telegram(
                 &format!(
                     "Tu IP pública de {}, no ha cambiado en {} horas",
                     location, tiempo_transcurrido
@@ -90,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if ip_actual != ip_anterior {
             let tiempo_transcurrido = (tiempo_actual - tiempo_anterior) / 3600; // Horas
-            enviar_notificacion(
+            send_notification_to_telegram(
                 &format!(
                     "Tu IP pública de {}, ha cambiado a: {} (después de {} horas)",
                     location, ip_actual, tiempo_transcurrido
@@ -106,5 +131,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         sleep(Duration::from_secs(60)).await; // Verificar cada minuto
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_obtener_ip_publica() {
+        let ip = get_public_ip().await.unwrap();
+
+        assert!(ip.len() > 0, "La IP no puede estar vacía");
     }
 }
