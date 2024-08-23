@@ -2,8 +2,7 @@ use std::env;
 use std::fs;
 use std::time::{Duration, Instant};
 
-use chrono::format::parse;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use tokio::time::sleep;
 // Archivo para guardar la última IP
 const ARCHIVO_IP: &str = "ultima_ip.txt";
@@ -24,11 +23,11 @@ async fn get_public_ip_from(url: &str) -> Result<IpAddr, String> {
     if !respuesta.status().is_success() {
         return Err(respuesta.text().await.map_err(|error| error.to_string())?);
     }
-    return respuesta
+    respuesta
         .text()
         .await
         .map_err(|error| error.to_string())
-        .map(|ip| parse_ip(&ip))?;
+        .map(|ip| parse_ip(&ip))?
 }
 
 async fn get_public_ip() -> Result<String, String> {
@@ -90,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(_) => {
                 println!(
                     "[{}] Error al obtener la IP pública posible perdida de conexión a internet",
-                    DateTime::<Utc>::from(Utc::now()).to_rfc3339()
+                    Utc::now().to_rfc3339()
                 );
                 sleep(Duration::from_secs(60)).await;
                 continue;
@@ -142,6 +141,6 @@ mod tests {
     async fn test_obtener_ip_publica() {
         let ip = get_public_ip().await.unwrap();
 
-        assert!(ip.len() > 0, "La IP no puede estar vacía");
+        assert!(!ip.is_empty(), "La IP no puede estar vacía");
     }
 }
