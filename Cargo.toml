@@ -1,0 +1,9 @@
+[package]
+name = "check_public_ip"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dotenv = "0.15.0"
+reqwest = {features = ["blocking", "json"], version = "*"}
+tokio = { version ="1.39.3", features = ["full"] }
