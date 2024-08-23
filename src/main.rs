@@ -6,7 +6,7 @@ use chrono::Utc;
 use tokio::time::sleep;
 // Archivo para guardar la última IP
 const ARCHIVO_IP: &str = "ultima_ip.txt";
-const TIEMPO_NO_CAMBIO_MINUTO: u64 = 24 * 60; // 1 dia
+const TIEMPO_NO_CAMBIO_HORA: u64 =  60; // 1 hora
 
 use std::net::{AddrParseError, IpAddr};
 
@@ -72,7 +72,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Leer la última IP y el tiempo del archivo si existe
     let mut ip_anterior = String::new();
     let mut tiempo_anterior = 0;
-    let mut tiempo_no_cambio = TIEMPO_NO_CAMBIO_MINUTO;
+    let mut tiempo_no_cambio = TIEMPO_NO_CAMBIO_HORA;
+    let mut time_to_plus = 1;
     if let Ok(contenido) = fs::read_to_string(ARCHIVO_IP) {
         let mut partes = contenido.split_whitespace();
         ip_anterior = partes.next().unwrap_or_default().to_string();
@@ -98,7 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let tiempo_actual = Instant::now().elapsed().as_secs();
         if ip_actual == ip_anterior && tiempo_no_cambio == 0 {
-            tiempo_no_cambio = TIEMPO_NO_CAMBIO_MINUTO;
+            tiempo_no_cambio = time_to_plus * TIEMPO_NO_CAMBIO_HORA;
+            time_to_plus += 1;
             let tiempo_transcurrido = (tiempo_actual - tiempo_anterior) / 3600; // Horas
             send_notification_to_telegram(
                 &format!(
@@ -126,7 +128,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fs::write(ARCHIVO_IP, format!("{} {}", ip_actual, tiempo_actual))?;
             ip_anterior = ip_actual;
             tiempo_anterior = tiempo_actual;
-            tiempo_no_cambio = TIEMPO_NO_CAMBIO_MINUTO;
+            tiempo_no_cambio = TIEMPO_NO_CAMBIO_HORA;
+            time_to_plus = 1;
         }
 
         sleep(Duration::from_secs(60)).await; // Verificar cada minuto
