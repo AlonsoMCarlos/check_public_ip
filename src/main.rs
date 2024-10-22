@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use tokio::time::sleep;
 // Archivo para guardar la última IP
-const ARCHIVO_IP: &str = "ultima_ip.txt";
+const ARCHIVO_IP: &str = "/tmp/ultima_ip.txt";
 const TIEMPO_NO_CAMBIO_HORA: u64 =  60; // 1 hora
 
 use std::net::{AddrParseError, IpAddr};
