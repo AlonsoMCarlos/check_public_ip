@@ -1,8 +1,11 @@
+use chrono::Utc;
 use std::env;
 use std::fs;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader};
+use std::io::{Seek, SeekFrom, Write};
+use std::os::unix::fs::FileExt;
 use std::time::{Duration, Instant};
-
-use chrono::Utc;
 use tokio::time::sleep;
 // Archivo para guardar la última IP
 const ARCHIVO_IP: &str = "/tmp/ultima_ip.txt";
@@ -58,6 +61,17 @@ async fn send_notification_to_telegram(
     Ok(())
 }
 
+fn duration_to_string(duration: Duration) -> String {
+    let dias = duration.as_secs() / 86400;
+    let horas = (duration.as_secs() % 86400) / 3600;
+    let minutos = (duration.as_secs() % 3600) / 60;
+    let segundos = duration.as_secs() % 60;
+    format!(
+        "{} días, {} horas, {} minutos y {} segundos",
+        dias, horas, minutos, segundos
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
@@ -71,29 +85,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let location: String = env::var("LOCATION").unwrap_or("LOCATION".to_string());
     // Leer la última IP y el tiempo del archivo si existe
     let mut ip_anterior = String::new();
-    let mut tiempo_anterior = 0.0;
+    let mut tiempo_anterior = String::new();
     let mut tiempo_no_cambio = TIEMPO_NO_CAMBIO_HORA;
     let mut time_to_plus = 1;
-    if let Ok(contenido) = fs::read_to_string(ARCHIVO_IP) {
-        let mut partes = contenido.split_whitespace();
-        ip_anterior = partes.next().unwrap_or_default().to_string();
-        tiempo_anterior = partes
-            .next()
-            .unwrap_or_default()
-            .parse::<f64>()
-            .unwrap_or(0.0);
-    }
+    let (ip, tiempo) = read_last_ip(ARCHIVO_IP);
+    ip_anterior = ip;
+    tiempo_anterior = tiempo;
+    println!(
+        "[{}] IP anterior: {} (desde {})",
+        Utc::now().to_rfc3339(),
+        ip_anterior,
+        tiempo_anterior
+    );
 
     let mut instante = Instant::now();
     loop {
         println!("[{}] Verificando la IP pública", Utc::now().to_rfc3339());
-        let tiempo_en_horas = instante.elapsed().as_secs() / 3600;
-        let tiempo_en_minutos = (instante.elapsed().as_secs_f64() % 3600.0) / 60.0;
+
         println!(
-            "[{}] Tiempo transcurrido: {} horas y {:.0} minutos",
+            "[{}] {} desde el ultimo cambio",
             Utc::now().to_rfc3339(),
-            tiempo_en_horas,
-            tiempo_en_minutos
+            duration_to_string(instante.elapsed())
         );
 
         let ip_actual = match get_public_ip().await {
@@ -111,13 +123,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if ip_actual == ip_anterior && tiempo_no_cambio == 0 {
             tiempo_no_cambio = time_to_plus * TIEMPO_NO_CAMBIO_HORA;
             time_to_plus += 1;
-            let tiempo_en_horas = instante.elapsed().as_secs() / 3600;
-            let tiempo_en_minutos = (instante.elapsed().as_secs_f64() % 3600.0) / 60.0;
-
             send_notification_to_telegram(
                 &format!(
-                    "Tu IP pública de {}, no ha cambiado en {} horas y {:.0} minutos",
-                    location, tiempo_en_horas, tiempo_en_minutos
+                    "\u{23F9} Tu IP pública {} de {}, no ha cambiado en {}",
+                    ip_actual,
+                    location,
+                    duration_to_string(instante.elapsed())
                 ),
                 &bot_token,
                 chat_id,
@@ -127,23 +138,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tiempo_no_cambio -= 1;
         }
         if ip_actual != ip_anterior {
-            let tiempo_en_horas = instante.elapsed().as_secs() / 3600;
-            let tiempo_en_minutos = (instante.elapsed().as_secs_f64() % 3600.0) / 60.0;
-            let tiempo_transcurrido = instante.elapsed().as_secs_f64() / 3600.0;
+            let elapsed = instante.elapsed();
+
             send_notification_to_telegram(
                 &format!(
-                    "Tu IP pública de {}, ha cambiado a: {} (después de {} horas y {:.0} minutos)",
-                    location, ip_actual, tiempo_en_horas, tiempo_en_minutos
+                    "\u{2705} Tu IP pública de {}, ha cambiado a: {} (después de {})",
+                    location,
+                    ip_actual,
+                    duration_to_string(elapsed)
                 ),
                 &bot_token,
                 chat_id,
             )
             .await?;
 
-            fs::write(
-                ARCHIVO_IP,
-                format!("{} {:.3}", ip_actual, tiempo_transcurrido),
-            )?;
+            write_to_file(ARCHIVO_IP, &format!("{} - {}", ip_actual, Utc::now())).unwrap_or_else(
+                |error| {
+                    eprintln!("Error al escribir la IP en el archivo: {}", error);
+                },
+            );
             ip_anterior = ip_actual;
             instante = Instant::now();
             tiempo_no_cambio = TIEMPO_NO_CAMBIO_HORA;
@@ -152,6 +165,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         sleep(Duration::from_secs(60)).await; // Verificar cada minuto
     }
+}
+
+fn write_to_file(path: &str, content: &str) -> std::io::Result<()> {
+    let mut file = OpenOptions::new().write(true).create(true).open(path)?;
+
+    file.seek(SeekFrom::End(0))?;
+    writeln!(file, "{}", content)?;
+    Ok(())
+}
+
+fn read_last_ip(path: &str) -> (String, String) {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("Error al abrir el archivo {}: {}", path, error);
+            return (String::new(), String::new()); // Devolver valores por defecto
+        }
+    };
+
+    println!("path: {}", path);
+    let reader = BufReader::new(file);
+    let last_line = reader
+        .lines()
+        .last()
+        .and_then(|result| result.ok())
+        .unwrap_or_default();
+
+    let mut partes = last_line.split(" - ");
+    let ip = partes.next().unwrap_or_default().to_string();
+    let tiempo = partes.next().unwrap_or_default().to_string();
+    println!("ip: {} tiempo: {}", ip, tiempo);
+    (ip, tiempo)
 }
 
 #[cfg(test)]
